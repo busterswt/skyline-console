@@ -33,7 +33,7 @@ import globalUserStore from 'stores/keystone/user';
 import globalSkylineStore from 'stores/skyline/skyline';
 import ProfileIcon from 'asset/image/profile.svg';
 import Google from 'asset/image/google.svg';
-import Google_auth from 'asset/image/authenticator_new.png';
+import Google_auth from 'asset/image/authenticator.png';
 import Arrow from 'asset/image/arrow.png';
 import Playstore from 'asset/image/playstore.png';
 import Appstore from 'asset/image/app-store.png';
