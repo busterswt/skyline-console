@@ -13,24 +13,30 @@
 // limitations under the License.
 
 import React, { Component } from 'react';
-import { Input, Button, Select, Row, Col } from 'antd';
+import { Input, Button, Select, Row, Col, Image } from 'antd';
+import { InputOTP } from 'antd-input-otp';
 import { inject, observer } from 'mobx-react';
 import { Link } from 'react-router-dom';
 import { InfoCircleFilled } from '@ant-design/icons';
 import SimpleForm from 'components/SimpleForm';
 import globalSkylineStore from 'stores/skyline/skyline';
+import globalUserStore from 'stores/keystone/user';
 import i18n from 'core/i18n';
 import { isEmpty } from 'lodash';
 import styles from './index.less';
+import Password from 'asset/image/password.png';
 
 export class Login extends Component {
   constructor(props) {
     super(props);
     this.init();
     this.state = {
+      detail: {},
       error: false,
+      passcodeError: false,
       message: '',
       loading: false,
+      totp_enabled: false,
       loginTypeOption: this.passwordOption,
     };
   }
@@ -124,12 +130,18 @@ export class Login extends Component {
       value: 'password',
     };
   }
+  get passcodeOption() {
+    return {
+      label: t('MultiFactor Authentication'),
+      value: 'passcode',
+    };
+  }
 
   get loginTypeOptions() {
     if (!this.enableSSO) {
       return [];
     }
-    return [this.passwordOption, ...this.SSOOptions];
+    return [this.passwordOption, this.passcodeOption, ...this.SSOOptions];
   }
 
   onLoginTypeChange = (value, option) => {
@@ -140,6 +152,9 @@ export class Login extends Component {
     const { loginTypeOption: { value } = {} } = this.state;
     if (value === 'password') {
       return 'password';
+    } 
+    if (value === 'passcode') {
+      return 'passcode';
     }
     return 'sso';
   }
@@ -159,13 +174,90 @@ export class Login extends Component {
     return data;
   }
 
+  get passcodeForm() {
+    const { error, loading } = this.state;
+    const errorItem = {
+      name: 'error',
+      hidden: !error,
+      render: () => (
+        <div className={styles['login-error']}>
+          <InfoCircleFilled />
+          {this.getErrorMessage()}
+        </div>
+      ),
+    };
+    const passcodeItem = {
+      name: 'passcode',
+      required: true,
+      message: t('Please input your Passcode!'),
+      render: () => (
+        <InputOTP
+          inputType="numeric"
+          inputRegex="[^0-9]"
+          inputClassName={styles['input-classname']}
+        />
+      ),
+    };
+    const submitPasscodeItem = {
+      name: 'submit',
+      render: () => (
+        <>
+          <Row gutter={24} justify="center">
+            <Col span={6.99}>
+              <Button
+                loading={loading}
+                type="primary"
+                danger
+                htmlType="reset"
+                className="login-form-button"
+                onClick={() => {
+                  this.setState({ totp_enabled: false, detail: {} });
+                  this.formRef.current.resetFields();
+                }}
+              >
+                {t('Cancel')}
+              </Button>
+            </Col>
+            <Col span={6}>
+              <Button
+                loading={loading}
+                type="primary"
+                htmlType="submit"
+                className="login-form-button"
+              >
+                {t('Log in')}
+              </Button>
+            </Col>
+            {/* </Row> */}
+            {/* <Row gutter={8} justify="center"> */}
+          </Row>
+        </>
+      ),
+    };
+    const cancelPasscodeItem = {
+      name: 'cancel',
+      render: () => (
+        <Row gutter={8} justify="center">
+          <Col span={6.99}>
+            <Button
+              loading={loading}
+              type="primary"
+              danger
+              htmlType="reset"
+              className="login-form-button"
+            >
+              {t('Cancel')}
+            </Button>
+          </Col>
+        </Row>
+      ),
+    };
+    return [errorItem, passcodeItem, submitPasscodeItem];
+    // return [errorItem, passcodeItem, submitPasscodeItem, cancelPasscodeItem];
+  }
+
   get formItems() {
     const { error, loading } = this.state;
-    // eslint-disable-next-line no-unused-vars
-    const buttonProps = {
-      block: true,
-      type: 'primary',
-    };
     const loginType = this.currentLoginType;
     const errorItem = {
       name: 'error',
@@ -263,11 +355,7 @@ export class Login extends Component {
         />
       ),
     };
-    if (this.enableSSO) {
-      if (loginType === 'password') {
-        return [typeItem, ...namePasswordItems, submitItem];
-      }
-
+    if (!this.enableSSO) {
       return [typeItem, submitItem];
     }
     return [...namePasswordItems, submitItem];
@@ -275,21 +363,21 @@ export class Login extends Component {
 
   getUserId = (str) => str.split(':')[1].trim().split('.')[0];
 
-  onLoginFailed = (error, values) => {
+  onLoginFailed = (error) => {
+    this.formRef.current.resetFields();
     this.setState({
       loading: false,
     });
-    const {
-      data: { detail = '' },
-    } = error.response;
-    const message = detail || '';
-    if (
-      message.includes(
-        'The password is expired and needs to be changed for user'
-      )
-    ) {
-      this.dealWithChangePassword(message, values);
+    if (error === false) {
+      this.setState({
+        error: true,
+        message: 'Incorrect Password',
+      });
     } else {
+      const {
+        data: { detail = '' },
+      } = error.response;
+      const message = detail || '';
       this.setState({
         error: true,
         message,
@@ -307,30 +395,74 @@ export class Login extends Component {
     }
   };
 
-  onFinish = (values) => {
-    if (this.currentLoginType === 'sso') {
-      document.location.href = this.currentSSOLink;
-      return;
-    }
+  onTotp = (codeArray) => {
     this.setState({
       loading: true,
       message: '',
       error: false,
     });
-    const { password, region, domain } = values;
-    const usernameDomain = this.getUsernameAndDomain({
-      usernameDomain: domain,
-    });
-    const body = { password, region, ...usernameDomain };
-    this.rootStore.login(body).then(
+    const passcode = codeArray.passcode.join('');
+    this.setState((prevState) => ({
+      loading: true,
+      message: '',
+      error: false,
+      detail: { ...prevState.detail, passcode },
+    }));
+    this.rootStore.login(this.state.detail).then(
       () => {
         this.onLoginSuccess();
       },
       (error) => {
-        this.onLoginFailed(error, values);
+        this.setState({ passcodeError: true });
+        this.onLoginFailed(error);
       }
     );
   };
+
+  onFinish = (values) => {
+    let passcode = 0;
+    let body = null;
+    body = { ...values, passcode };
+    this.setState({
+      loading: true,
+      message: '',
+      error: false,
+      detail: body,
+    });
+    globalUserStore.passwordCheck(this.state.detail).then(
+      (value) => {
+        if (value) {
+          globalUserStore.checktotp(body).then(
+            (exists) => {
+              if (exists) {
+                this.setState({ totp_enabled: true, loading: false });
+              } else {
+                this.rootStore.login(body).then(
+                  () => {
+                    this.onLoginSuccess();
+                  },
+                  (error) => {
+                    this.setState({ passcodeError: false });
+                    this.onLoginFailed(error);
+                  }
+                );
+              }
+            },
+            (error) => {
+              console.log(error);
+            }
+          );
+        } else {
+          this.setState({ passcodeError: false });
+          this.onLoginFailed(value);
+        }
+      },
+      (error) => {
+        this.setState({ passcodeError: false });
+        this.onLoginFailed(error);
+       }
+     );
+   };
 
   getErrorMessage() {
     const { message } = this.state;
@@ -348,6 +480,9 @@ export class Login extends Component {
       return t(
         'If you are not authorized to access any project, or if the project you are involved in has been deleted or disabled, contact the platform administrator to reassign the project'
       );
+    }
+    if (this.state.passcodeError) {
+      return t('Passcode is incorrect');
     }
     return t('Username or password is incorrect');
   }
@@ -395,7 +530,6 @@ export class Login extends Component {
   };
 
   updateDefaultValue = () => {
-    this.formRef.current.resetFields();
     if (this.formRef.current && this.formRef.current.resetFields) {
       this.formRef.current.resetFields();
     }
@@ -414,15 +548,39 @@ export class Login extends Component {
     return (
       <>
         <h1 className={styles.welcome}>{this.productName}</h1>
-        <SimpleForm
-          formItems={this.formItems}
-          name="normal_login"
-          className={styles['login-form']}
-          initialValues={this.defaultValue}
-          onFinish={this.onFinish}
-          formref={this.formRef}
-          size="large"
-        />
+        {!this.state.totp_enabled ? (
+          <SimpleForm
+            formItems={this.formItems}
+            name="normal_login"
+            className={styles['login-form']}
+            initialValues={this.defaultValue}
+            onFinish={this.onFinish}
+            formref={this.formRef}
+            size="large"
+          />
+        ) : (
+          <>
+            <Row gutter={16} justify="center">
+              <Col span={18}>
+                <Image
+                  height={250}
+                  preview={false}
+                  src={Password}
+                  style={{paddingBottom: '1.4rem'}}
+                />
+              </Col>
+            </Row>
+            <SimpleForm
+              formItems={this.passcodeForm}
+              name="normal_login"
+              className={styles['login-form']}
+              initialValues={this.defaultValue}
+              onFinish={this.onTotp}
+              formref={this.formRef}
+              size="large"
+            />
+          </>
+        )}
         {this.renderExtra()}
       </>
     );

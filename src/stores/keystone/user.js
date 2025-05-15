@@ -345,6 +345,21 @@ export class UserStore extends Base {
   }
 
   @action
+  async generateTOTP(totp) {
+    return this.skylineClient.totpgen(totp);
+  }
+
+  @action
+  async checktotp(totp) {
+    return this.skylineClient.totpcheck(totp);
+  }
+
+  @action
+  async passwordCheck(totp) {
+    return this.skylineClient.checkpassword(totp);
+  }
+
+  @action
   async forbidden({ id }) {
     const reqBody = {
       user: { enabled: false },
